@@ -1,0 +1,231 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Holding {
+  id            String   @id @default(cuid())
+  ticker        String   @unique
+  name          String
+  exchange      String
+  securityType  String
+  quantity      Float
+  bookValueCAD  Float
+  bookValueMkt  Float
+  bookValueMktCurrency String
+  marketPrice   Float
+  marketPriceCurrency String
+  marketValue   Float
+  marketValueCurrency String
+  unrealizedReturn Float
+  unrealizedReturnCurrency String
+  bucket        String   @default("Core")
+  theme         String   @default("")
+  conviction    Int      @default(7)
+  horizon       String   @default("LONG")
+  targetPct     Float    @default(0)
+  thesis        String   @default("")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  priceHistory   PriceHistory[]
+  journalEntries JournalEntry[]
+}
+
+model PriceHistory {
+  id        String   @id @default(cuid())
+  ticker    String
+  price     Float
+  currency  String
+  date      DateTime @default(now())
+  holding   Holding  @relation(fields: [ticker], references: [ticker])
+}
+
+model JournalEntry {
+  id      String   @id @default(cuid())
+  ticker  String?
+  title   String
+  body    String
+  tags    String   @default("")
+  date    DateTime @default(now())
+  holding Holding? @relation(fields: [ticker], references: [ticker])
+}
+
+model WatchlistItem {
+  id         String   @id @default(cuid())
+  ticker     String   @unique
+  name       String
+  theme      String
+  notes      String
+  alertPrice Float?
+  createdAt  DateTime @default(now())
+}
+
+model MacroTrend {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  signal    String
+  drivers   String
+  risks     String
+  tickers   String
+  updatedAt DateTime @updatedAt
+}
+
+model PortfolioSettings {
+  id               String  @id @default(cuid())
+  name             String  @default("TFSA 2026")
+  currency         String  @default("CAD")
+  tfsaRoom         Float   @default(7200)
+  maxPosition      Float   @default(20)
+  rebalanceTrigger Float   @default(5)
+  alertsEnabled    Boolean @default(true)
+}
+
+model ImportLog {
+  id         String   @id @default(cuid())
+  filename   String
+  rows       Int
+  status     String
+  message    String
+  importedAt DateTime @default(now())
+}
+
+model WsSession {
+  id          String    @id @default(cuid())
+  sessionBlob String // AES-256-GCM-encrypted JSON: {accessToken, refreshToken, sessionId, wssdi, clientId, tokenInfo}
+  identityId  String?
+  status      String    @default("connected") // connected | expired | error | disconnected
+  lastError   String    @default("")
+  lastSyncAt  DateTime?
+  updatedAt   DateTime  @updatedAt
+}
+
+model WsAccount {
+  id          String   @id // WS canonical account id (the TFSA)
+  description String
+  type        String // e.g. "tfsa"
+  currency    String   @default("CAD")
+  cashCAD     Float    @default(0)
+  cashUSD     Float    @default(0)
+  netValueCAD Float    @default(0)
+  updatedAt   DateTime @updatedAt
+}
+
+model Activity {
+  id          String   @id // WS canonicalId — natural dedupe key
+  accountId   String
+  type        String // BUY | SELL | DIVIDEND | DEPOSIT | WITHDRAWAL | FEE | OTHER
+  subType     String   @default("")
+  ticker      String   @default("")
+  description String
+  quantity    Float?
+  price       Float?
+  amount      Float?
+  currency    String   @default("CAD")
+  status      String   @default("")
+  occurredAt  DateTime
+  syncedAt    DateTime @default(now())
+  seen        Boolean  @default(false) // drives one-time "new fill" toast
+  @@index([occurredAt])
+}
+
+model PortfolioSnapshot {
+  id          String   @id @default(cuid())
+  totalCAD    Float
+  cashCAD     Float    @default(0)
+  bookCostCAD Float    @default(0)
+  usdCadRate  Float    @default(0)
+  takenAt     DateTime @default(now())
+  @@index([takenAt])
+}
+
+model KV {
+  key   String @id
+  value String
+}
+
+model NewsItem {
+  id          String   @id // hash of link — dedupe key
+  tickers     String   @default("") // comma-separated holdings this story relates to
+  title       String
+  link        String
+  source      String   @default("")
+  summary     String   @default("")
+  publishedAt DateTime
+  fetchedAt   DateTime @default(now())
+  @@index([publishedAt])
+}
+
+model NewsBrief {
+  id          String   @id @default(cuid())
+  body        String // AI-generated markdown "what matters today"
+  itemCount   Int      @default(0)
+  generatedAt DateTime @default(now())
+}
+
+model DayTradeSignal {
+  id         String   @id @default(cuid())
+  session    String   @unique // trading date "YYYY-MM-DD" (ET)
+  symbol     String   @default("SPY")
+  direction  String // BULLISH | BEARISH | NEUTRAL
+  confidence Float // 0-100
+  price      Float // SPY price at signal time
+  detail     String   @default("") // JSON: votes, levels, indicators
+  trade      String   @default("") // JSON: recommended option trade (or no-trade)
+  outcome    String   @default("") // "" until evaluated, then WIN | LOSS | SKIPPED
+  outcomePct Float? // signed % from ~10:35 entry to session close, in signal direction
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Alert {
+  id        String    @id @default(cuid())
+  type      String // PRICE_MOVE | WATCHLIST | DAYTRADE | SYSTEM
+  ticker    String    @default("")
+  title     String
+  body      String    @default("")
+  href      String    @default("")
+  severity  String    @default("info") // info | warning | action
+  dedupeKey String    @unique // e.g. "PRICE_MOVE:NVDA:2026-07-07"
+  createdAt DateTime  @default(now())
+  readAt    DateTime?
+}
+
+model Goal {
+  id                  String   @id @default(cuid())
+  targetAmount        Float    @default(1000000)
+  targetDate          DateTime
+  monthlyContribution Float    @default(500)
+  assumedCagrPct      Float    @default(8)
+  updatedAt           DateTime @updatedAt
+}
+
+model TickerRating {
+  id           String   @id @default(cuid())
+  ticker       String   @unique
+  score        Float // composite 1-10
+  verdict      String // BUY | HOLD | SELL
+  fundamentals Float? // sub-score 1-10
+  technicals   Float? // sub-score 1-10
+  analyst      Float? // sub-score 1-10
+  social       Float? // sub-score 1-10
+  rationale    String   @default("") // AI narrative
+  detail       String   @default("") // JSON blob of raw signals for the UI
+  priceAtRating Float? // underlying price when rated — for the outcomes scoreboard
+  ratedAt      DateTime @default(now())
+}
+
+model DiscordTask {
+  id          String    @id @default(cuid())
+  channelId   String
+  channelName String
+  text        String
+  priority    String    @default("medium")
+  done        Boolean   @default(false)
+  syncedAt    DateTime  @default(now())
+  completedAt DateTime?
+}

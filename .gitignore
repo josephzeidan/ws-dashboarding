@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+out/
+
+# Local database (your synced trades, notes, ratings — never commit)
+prisma/portfolio.db
+prisma/portfolio.db-journal
+*.db
+*.db-journal
+
+# Secrets & local env (API keys, encrypted WS session key)
+.env
+.env.local
+.env*.local
+prisma/.env
+!.env.example
+
+# Wealthsimple session file, if ever written to disk
+.ws-session.json
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Preview/dev tooling
+.claude/launch.json
