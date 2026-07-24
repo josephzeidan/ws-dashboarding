@@ -11,7 +11,7 @@ import { broadcast } from './broadcaster'
 import { getConnectionStatus } from '@/lib/ws-api/session-store'
 import { fullSync, logSyncFailure } from '@/lib/ws-api/sync'
 import { WsRateLimitError } from '@/lib/ws-api/errors'
-import { checkBigMovers, checkDayTradeSignal, checkWatchlist } from '@/lib/alerts'
+import { checkBigMovers, checkDayTradeSignal, checkSrZoneEntries, checkWatchlist } from '@/lib/alerts'
 import { fetchBars, groupBySession, RANGE_END } from '@/lib/daytrade/intraday'
 import { analyzeSession } from '@/lib/daytrade/strategy'
 
@@ -20,6 +20,7 @@ interface PollerState {
   priceTimer?: NodeJS.Timeout
   wsTimer?: NodeJS.Timeout
   signalTimer?: NodeJS.Timeout
+  srTimer?: NodeJS.Timeout
   lastPriceHistoryAt: Map<string, number>
   lastSnapshotAt: number
   wsBackoffUntil: number
@@ -182,6 +183,21 @@ async function signalTick(): Promise<void> {
   }
 }
 
+// --- S/R zone-entry watch (slow; network-heavy) ------------------------------
+
+const SR_INTERVAL_OPEN = 30 * 60_000
+const SR_INTERVAL_CLOSED = 3 * 3600_000
+
+async function srTick(): Promise<void> {
+  try {
+    if (isMarketOpen()) await checkSrZoneEntries()
+  } catch (err) {
+    console.error('srTick failed:', err instanceof Error ? err.message : err)
+  } finally {
+    state.srTimer = setTimeout(srTick, isMarketOpen() ? SR_INTERVAL_OPEN : SR_INTERVAL_CLOSED)
+  }
+}
+
 export function startPoller(): void {
   if (state.running) return
   state.running = true
@@ -189,6 +205,7 @@ export function startPoller(): void {
   state.priceTimer = setTimeout(priceTick, 1_000)
   state.wsTimer = setTimeout(wsTick, 4_000)
   state.signalTimer = setTimeout(signalTick, 8_000)
+  state.srTimer = setTimeout(srTick, 60_000) // first SR scan a minute in
   console.log('[poller] started')
 }
 

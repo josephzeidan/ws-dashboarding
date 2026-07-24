@@ -6,38 +6,43 @@
 
 ## 1. What this project is, in one paragraph
 
-This is a **local, single-user web app** that turns your Wealthsimple TFSA into a live, opinionated investing dashboard. It mirrors your real holdings, cash, and trades in near-real-time (read-only — it can never place an order), then layers analysis on top: portfolio quality scoring, a per-ticker buy/sell/hold rating engine, a news brief, a SPY intraday day-trade signal with a built-in backtester, price/news alerts, and a compounding goal tracker. The guiding idea, stated by the project owner: *"I don't want to be a day trader — I want the power of compounding plus tactical, informed decisions, guided by something like a 24/7 senior Wall Street analyst."* Every feature exists in service of that: **inform, prioritize, and be honest about uncertainty** — not just display numbers.
+This is a **local, single-user web app** that turns your Wealthsimple TFSA into a live, opinionated investing dashboard — and, increasingly, a general market-analysis workstation. It mirrors your real holdings, cash, and trades in near-real-time (read-only — it can never place an order), then layers analysis on top: portfolio quality scoring, a per-ticker buy/sell/hold rating engine, a news brief, a SPY intraday day-trade signal with a built-in backtester, a **support & resistance zone engine** that maps price levels for any ticker, price/news alerts, and a compounding goal tracker. The guiding idea, stated by the project owner: *"I don't want to be a day trader — I want the power of compounding plus tactical, informed decisions, guided by something like a 24/7 senior Wall Street analyst."* Every feature exists in service of that: **inform, prioritize, and be honest about uncertainty** — not just display numbers.
+
+> **This document is the central reference for the whole project.** It's kept current as features land. If you read only one file to understand what exists and how it fits together, read this one — each section ends by pointing at the source files that do the real work.
 
 ---
 
 ## 2. High-level architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Browser (React client components)                              │
-│  Dashboard · Holdings · Insights · Activity · News · Rate ·      │
-│  SPY Day Trade · Recommendations · Rebalancing · Trends ·        │
-│  Watchlist · Journal · Settings                                  │
-└───────────────▲───────────────────────────────┬─────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  Browser (React client components)                                │
+│  Dashboard · Holdings · Insights · Activity · News · Rate ·        │
+│  Support/Resistance · SPY Day Trade · Recommendations ·            │
+│  Rebalancing · Trends · Watchlist · Journal · Settings             │
+└───────────────▲───────────────────────────────┬──────────────────┘
                 │  fetch() to /api/*             │  EventSource
                 │                                 │  /api/stream (SSE)
-┌───────────────┴─────────────────────────────────┴───────────────┐
-│  Next.js 14 App Router server (single Node process)              │
-│  ┌──────────────┐  ┌───────────────┐  ┌────────────────────┐    │
-│  │ API routes   │  │ Background    │  │ Analysis libraries │    │
-│  │ (src/app/api)│  │ poller        │  │ (src/lib, src/     │    │
-│  │              │  │ (src/lib/live)│  │  analytics)        │    │
-│  └──────┬───────┘  └───────┬───────┘  └──────────┬─────────┘    │
-└─────────┼──────────────────┼──────────────────────┼─────────────┘
+┌───────────────┴─────────────────────────────────┴────────────────┐
+│  Next.js 14 App Router server (single Node process)               │
+│  ┌──────────────┐  ┌───────────────┐  ┌─────────────────────┐    │
+│  │ API routes   │  │ Background    │  │ Analysis libraries  │    │
+│  │ (src/app/api)│  │ poller        │  │ src/lib/{sr,daytrade,│    │
+│  │              │  │ (src/lib/live)│  │ rating,ws-api,       │    │
+│  │              │  │               │  │ market-data}, analytics│  │
+│  └──────┬───────┘  └───────┬───────┘  └──────────┬──────────┘    │
+└─────────┼──────────────────┼──────────────────────┼──────────────┘
           │                  │                       │
-┌─────────▼──────────────────▼───────────┐  ┌────────▼────────────┐
-│  Prisma + SQLite (prisma/portfolio.db)  │  │ External data       │
-│  Single source of truth for everything  │  │ Wealthsimple GraphQL │
-│  the app knows                          │  │ Yahoo Finance        │
-│                                          │  │ Reddit API           │
-│                                          │  │ Anthropic (Claude)   │
-└──────────────────────────────────────────┘  └──────────────────────┘
+┌─────────▼──────────────────▼───────────┐  ┌────────▼─────────────┐
+│  Prisma + SQLite (prisma/portfolio.db)  │  │ External data        │
+│  Single source of truth for everything  │  │ Wealthsimple GraphQL  │
+│  the app knows (portfolio + OHLCV cache │  │ Yahoo Finance         │
+│  + analysis caches)                     │  │ Reddit API            │
+│                                          │  │ Anthropic (Claude)    │
+└──────────────────────────────────────────┘  └───────────────────────┘
 ```
+
+External market data is reached through a small **provider abstraction** (`src/lib/market-data/`) so the concrete source (currently keyless Yahoo) can be swapped without touching the engines that consume it.
 
 **It's one process.** There's no separate backend service — Next.js serves the React pages *and* the API routes *and* runs a background poller inside the same server. Everything reads/writes one local SQLite file. This is intentional: it's a single-user local app, not a multi-tenant SaaS, so the simplest architecture that works is the right one.
 
@@ -51,12 +56,14 @@ This is a **local, single-user web app** that turns your Wealthsimple TFSA into 
 | Language | **TypeScript** end-to-end | Type safety across API responses, DB models, and UI props |
 | Database | **SQLite via Prisma ORM** | Zero-config, file-based, perfect for a single local user; `prisma/portfolio.db` |
 | Styling | **Tailwind CSS** (utility classes) + inline styles in most components | Fast iteration; no design system overhead for a personal tool |
-| Charts | **Recharts** | Area/Bar/Line charts for portfolio value, insights, calibration |
+| Charts | **Recharts** + **lightweight-charts** (TradingView) | Recharts for portfolio value/insights/calibration; lightweight-charts for the candlestick + zone-band chart in the S/R engine |
 | Validation | **Zod** | Schema-validates every Wealthsimple GraphQL response so API drift fails loud, not silently |
 | CSV parsing | **PapaParse** | Fallback data path (Wealthsimple holdings CSV export) |
 | Live updates | **Server-Sent Events (SSE)**, no external message broker | One `/api/stream` endpoint pushes events to every open browser tab |
+| Testing | **Vitest** | Pure-function unit tests for the S/R engine (`npm test`) |
 | AI | **Anthropic Claude** (`claude-haiku-4-5` by default) via raw `fetch`, no SDK | News briefs, AI ticker rationale, Reddit sentiment scoring, Morning Brief composition |
-| External market data | **Yahoo Finance** (unofficial, keyless endpoints — chart API, RSS, quoteSummary via cookie+crumb, options chain) | No API key needed for 95% of what the app uses |
+| Market-data abstraction | **`MarketDataProvider` interface** (`src/lib/market-data/`) | Provider-agnostic bar/quote access with a Prisma-backed OHLCV cache; Yahoo is the current concrete adapter |
+| External market data | **Yahoo Finance** (unofficial, keyless endpoints — chart API, RSS, quoteSummary via cookie+crumb, options chain, multi-timeframe intraday bars) | No API key needed for 95% of what the app uses |
 | Brokerage data | **Unofficial Wealthsimple GraphQL API**, hand-ported to TypeScript | The only way to get live TFSA data — Wealthsimple has no public API |
 | Social sentiment | **Reddit API** (OAuth client-credentials) | r/stocks + r/investing + r/wallstreetbets search, feeds the ticker rater |
 
@@ -86,8 +93,12 @@ Every model lives in `prisma/schema.prisma`, backed by one SQLite file (`prisma/
 - **`TickerRating`** — every "Rate a Stock" result: composite score, verdict, sub-scores, AI rationale, and the price at rating time (so the scoreboard can grade it later).
 - **`DayTradeSignal`** — one row per trading session: the SPY ensemble's direction/confidence, the recommended trade, and (once the session closes) the graded outcome.
 - **`NewsItem`** / **`NewsBrief`** — cached headlines and the AI-composed "what matters today" summary.
-- **`Alert`** — every alert the poller has raised (big mover, watchlist cross, day-trade signal), deduped per day, with read/unread state.
+- **`Alert`** — every alert the poller has raised (big mover, watchlist cross, day-trade signal, A-grade S/R zone entry), deduped per day, with read/unread state.
 - **`Goal`** — the user's wealth target (amount, date, monthly contribution, assumed growth rate).
+
+### Market data & S/R engine cache
+- **`OhlcvBar`** — the raw candlestick cache. One row per (symbol, timeframe, bar-open-time, session). Every bar the S/R engine and day-trade engine fetch from Yahoo is stored here so repeat analyses are cache-first; a per-timeframe TTL controls staleness.
+- **`SrAnalysisCache`** — a full computed `SRAnalysis` payload keyed by (symbol, `configHash`). Because the hash is a SHA-256 of the config + profile, any tuning change automatically busts the cache. TTL is set by the profile's primary anchor timeframe.
 
 ### User-authored content
 - **`JournalEntry`** — investment thesis notes; also auto-drafted by the system after every real buy/sell fill.
@@ -112,13 +123,14 @@ Wealthsimple has **no public API**. The app talks to their *unofficial* internal
 - **Read-only by design.** There is no "place order" code path anywhere in the app — a deliberate safety choice given the TFSA day-trading tax risk discussed in §9.
 - **Graceful degradation.** If Wealthsimple changes their API and a GraphQL response no longer matches the expected shape (validated by Zod), the app logs it, flips the connection status, and the UI falls back to manual CSV import (`src/lib/ws-csv-parser.ts`, Settings page) rather than crashing.
 
-### 5.2 Yahoo Finance (prices, news, fundamentals, options)
+### 5.2 Yahoo Finance (prices, news, fundamentals, options, bars)
 All keyless, no account needed — but used in several different modes depending on what's needed:
 - **Live quotes** (`src/lib/yahoo-finance.ts`) — the `/v8/finance/chart` endpoint, called every ~20s during market hours by the poller.
 - **News headlines** (`src/lib/news.ts`) — Yahoo's RSS feed per ticker, deduped by link hash.
-- **Fundamentals/analyst data** (`src/lib/rating/fundamentals.ts`) — the gated `quoteSummary` endpoint, which requires a **cookie + crumb handshake** (Yahoo's lightweight anti-scraping gate); the app fetches a session cookie, exchanges it for a crumb token, and reuses both for ~30 minutes.
+- **Fundamentals/analyst data** (`src/lib/rating/fundamentals.ts`) — the gated `quoteSummary` endpoint, which requires a **cookie + crumb handshake** (Yahoo's lightweight anti-scraping gate); the app fetches a session cookie, exchanges it for a crumb token, and reuses both for ~30 minutes. The same `getCrumb()` helper is reused by the options-chain and S/R fundamentals paths.
 - **Options chains** (`src/lib/daytrade/options.ts`) — same crumb mechanism, used to price the SPY day-trade spread recommendation off real bid/ask quotes.
-- **Intraday bars** (`src/lib/daytrade/intraday.ts`) — 1-minute and 5-minute OHLCV bars, normalized to exact America/New_York session time, which the entire day-trade engine is built on.
+- **Day-trade intraday bars** (`src/lib/daytrade/intraday.ts`) — 1-minute and 5-minute OHLCV bars, normalized to exact America/New_York session time, which the SPY day-trade engine is built on.
+- **S/R multi-timeframe bars** (`src/lib/market-data/providers/yahoo.ts`) — the S/R engine's dedicated adapter behind the `MarketDataProvider` interface. It fetches 1m–1W bars, **resamples 4h from 60m** (Yahoo has no native 4h interval), applies **split/dividend adjustment** via the `adjclose` ratio, and filters to regular hours — all cached in the `OhlcvBar` table (`src/lib/market-data/cache.ts`) with per-timeframe TTLs. See §8's Support & Resistance entry.
 
 ### 5.3 Reddit (social sentiment)
 Application-only OAuth (`REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` from `.env.local`) searches r/stocks + r/investing + r/wallstreetbets for a given ticker (`src/lib/rating/reddit.ts`). Posts are sentiment-scored **by Claude** when API credits are available (it understands sarcasm — "I've made a loss on every AI stock!" correctly scores bearish), falling back to a keyword lexicon otherwise.
@@ -140,6 +152,7 @@ Three pieces work together:
    - *Price tick* — every ~20s market hours / 15min closed: refresh all holding prices + USD/CAD rate, write price history, take a portfolio snapshot every ~15 min.
    - *WS tick* — every ~45s market hours / 10min closed, only when connected: sync positions + activities; broadcast if anything changed.
    - *Signal tick* — every ~10min market hours: re-run the SPY ensemble and raise an alert if it crosses the trade threshold.
+   - *S/R tick* — every ~30min market hours: scan holdings + watchlist and raise an alert when price enters an A/A+ grade support/resistance zone.
    - Alert rules (big movers ≥4%, watchlist price crossings) run inline inside the price tick.
    - It's started two ways: `instrumentation.ts` boots it when the Next.js server process starts, and `/api/stream` boots it lazily the first time any browser opens the SSE connection (belt-and-suspenders).
 
@@ -207,6 +220,22 @@ A chop filter penalizes tight or whipsaw-y sessions. The result is a direction +
 
 Two accountability mechanisms live on this page: a **60-session backtest** comparing the ensemble against the user's original raw idea side by side, and a **calibration tool** (`evaluate.ts`) that replays the ensemble at 10:35 ET across 60 historical sessions and buckets hit-rate by confidence level — so the number is checked against reality rather than trusted blindly.
 
+### Support & Resistance (`/sr`) — `src/lib/sr/*`, `src/lib/market-data/*`, `/api/sr/*`
+Type any ticker (not just holdings) and pick a timeframe profile; the engine maps its **support and resistance zones as price bands** — each with a strength score, an A+…D grade, and a plain-English list of *why* it scored that way. It's the largest single subsystem in the app (~15 library modules) and was built to a detailed external spec. The whole thing is **ATR-relative**: every threshold is expressed in multiples of Average True Range, which is why the identical config works on a $14 stock and a $900 stock.
+
+**The pipeline** (`src/lib/sr/engine.ts` orchestrates it):
+1. **Fetch + normalize** bars for the profile's anchor + execution timeframes (cache-first through the market-data layer): split/dividend adjustment, regular-hours filtering, gap flagging, bad-tick rejection.
+2. **Swings** (`swings.ts`) — fractal pivots gated by ATR prominence, with a trailing-edge *provisional* rule that is the main defence against lookahead bias (pivots in the last few bars can't be confirmed, so they never count).
+3. **Clustering → zones** (`clustering.ts`, `zones.ts`) — group same-price swings into bands where *the extreme edge is sacred*; detect touches with chop de-duplication (a 30-bar consolidation is **one** touch, not thirty); measure rejection velocity.
+4. **Scoring** (`scoring.ts`) — a weighted composite (touches, velocity, extremity, higher-timeframe confluence, round-number, freshness) → strength + grade + `reasons[]`/`warnings[]`. `touchCount < 2` hard-caps the grade at B (Key #3: two swings confirm a level).
+5. **Events** (`events.ts`) — decisive breaks *retire* a zone; a break-and-retest *flips its polarity* instead of deleting it; failed breakouts are detected and flagged (a high-value trap signal).
+6. **Context** — regime classification (`regime.ts`, trend/range/transitional) that gates setup confidence but never zone strength; an execution-timeframe market-structure machine (`structure.ts`); and **live setup detection** that emits a signal *only if every required gate passes*, otherwise showing a `watching` checklist with the failing gate highlighted.
+7. **Phase-5 refinements** — sloped **trendlines** (`trendlines.ts`), **volume-at-price** weighting (`volumeProfile.ts`), a multi-ticker **scanner** (`scanner.ts`, `/api/sr/scan`), and **A-grade zone-entry alerts** wired into the poller.
+
+**UI** (`src/components/sr/`): `SRDashboard` (ticker autocomplete + profile/session selectors), `SRChart` (lightweight-charts candlesticks with a price→pixel **zone-band overlay**, touch/failed-breakout markers), `ZoneCard` (grade chip, distance in $ and ATR, component-bar breakdown, the reasons/warnings lists), `RegimeBadge`, and `SetupAlert` (the pass/fail checklist). **API**: `/api/sr/[ticker]` (analysis), `/[ticker]/bars` (chart data), `/search` (symbol autocomplete), `/scan` (watchlist scan) — with a structured error taxonomy (404 unknown symbol, 422 insufficient data, 429 rate-limited, 503 provider down).
+
+Profiles (`src/lib/sr/config.ts`) range from `scalp` (1m execution) to `position` (1D execution); the default is **`swing`** (1h execution, zones detected on 4h + 1D). The engine's config lives in one place (`DEFAULT_SR_CONFIG`) and hashing it busts the analysis cache. Like the day-trade tool, this is explicitly **descriptive, not predictive** — the UI frames every output as "where price reacted before," never "buy here."
+
 ### Recommendations (`/recommendations`) & Rebalancing (`/rebalancing`) — `src/analytics/scoring.ts`
 Rule-based (no AI, no external calls) logic over your own holdings + metadata: concentration limits, over/underweight vs target, low-conviction-and-losing positions. Rebalancing adds a scenario simulator — model a cash injection or trim-only plan before touching anything for real.
 
@@ -217,7 +246,7 @@ Lighter-weight, mostly user-curated pages: theme/signal cards, pre-TFSA candidat
 Where you connect/disconnect Wealthsimple (email + password + 2FA), see connection status, trigger a manual sync, and use CSV import as a fallback if the live connection is degraded.
 
 ### Alerts & notifications — `src/lib/alerts.ts`, `/api/alerts`, `NotificationBell.tsx`
-Three rules run inside the poller independent of any page being open: a holding moving ≥4% in a day, a watchlist alert price being crossed, or the SPY signal crossing the trade threshold. Each is deduped once per ticker per day, pushed live via SSE, and shown as both a toast and a persistent bell icon with unread count in the sidebar — this is what makes the "24/7" framing literally true rather than aspirational.
+Four rules run inside the poller independent of any page being open: a holding moving ≥4% in a day, a watchlist alert price being crossed, the SPY signal crossing the trade threshold, or price entering an A/A+ grade support/resistance zone on a holding or watchlist name. Each is deduped once per ticker per day, pushed live via SSE, and shown as both a toast and a persistent bell icon with unread count in the sidebar — this is what makes the "24/7" framing literally true rather than aspirational.
 
 ### Quality Score breakdown — `src/analytics/scoring.ts`, `QualityBreakdown.tsx`
 Decomposes the portfolio's 0–100 quality score into its actual components (base, conviction, diversification, concentration penalty), shows how much headroom each has, and names the single biggest lever to improve it — including the specific low-conviction holdings dragging the score down. This directly answers "what's my confidence score and how do I raise it," which was a specific ask during development.
@@ -227,7 +256,22 @@ Compounds current portfolio value + monthly contributions at an assumed growth r
 
 ---
 
-## 9. Design philosophy — the decisions that shape everything
+## 9. Testing
+
+Most of the app is verified by running it against live data, but the **S/R engine has a real unit-test suite** because its logic is pure, math-heavy, and easy to get subtly wrong. Run it with:
+
+```bash
+npm test          # vitest run — one pass
+npm run test:watch
+```
+
+The suite (`src/lib/sr/__tests__/`) covers the spec's required cases: ATR against a hand-computed fixture, efficiency ratio (1.0 for a straight line, ~0 for a sawtooth), swing prominence rejection, the **trailing-edge lookahead guard**, zone-boundary preservation under widening/trimming, chop-vs-touch counting (a 30-bar consolidation = 1 touch), wick-vs-break discrimination, and the grade gate (a single-touch zone never grades above B). Config-driven fixtures live in `__tests__/fixtures.ts`.
+
+The other engines are validated empirically: the day-trade ensemble ships with its own backtest + calibration on the page itself, and the ratings tool grades its own past calls. The design principle (§10) is that **confidence numbers are checked against reality**, not just asserted.
+
+---
+
+## 10. Design philosophy — the decisions that shape everything
 
 A few explicit choices run through the whole codebase and explain *why* it looks the way it does:
 
@@ -237,21 +281,25 @@ A few explicit choices run through the whole codebase and explain *why* it looks
 4. **Confidence numbers are checked against reality, not just asserted.** The day-trade signal and the ticker ratings both carry scoreboards/calibration tools that grade past calls — a deliberate reaction to the idea that a "senior analyst" tool has to be honest about being wrong sometimes, not just confident-sounding.
 5. **The TFSA day-trading tax risk is treated as a real constraint, not a footnote.** Canada's CRA can (and has, per a 2023 court ruling) tax an entire TFSA's gains as business income if trading looks like a business — frequent, speculative, short-hold. The SPY Day Trade feature carries a persistent warning banner and is explicitly framed as decision support for a *separate, non-registered account* — never for execution inside the TFSA the rest of the app mirrors.
 6. **Graceful degradation over crashing.** Every external integration (Wealthsimple's unofficial API, Yahoo's gated endpoints, Reddit, Claude) is wrapped so that its failure narrows functionality instead of taking down the app — CSV import as WS fallback, lexicon sentiment as Claude fallback, rule-based briefs as AI-brief fallback.
+7. **No lookahead bias in the analytics.** Anything that reasons over historical bars (the S/R engine, the day-trade backtest) is careful never to use data from the future of the bar it's evaluating — e.g. the S/R engine marks trailing pivots *provisional* so they can't confirm a level before they'd actually have formed in real time.
+8. **Descriptive, not predictive.** The S/R engine and day-trade tool describe where price has reacted and how convincingly — they never phrase output as "buy here" or a price target. The user reads the reasons and forms their own judgement.
 
 ---
 
-## 10. Running it locally
+## 11. Running it locally
 
 ```bash
 cd ws-portfolio
 ./start.sh          # installs deps, generates Prisma client, seeds DB on first run, starts on :3000
 ```
 
-First run seeds an initial set of holdings; subsequent runs just start the dev server. Connect your Wealthsimple account from **Settings** to switch from seeded/CSV data to live sync. Required `.env.local` keys: `DATABASE_URL` (auto-set), `ANTHROPIC_API_KEY` (for AI features), `REDDIT_CLIENT_ID`/`REDDIT_CLIENT_SECRET`/`REDDIT_USER_AGENT` (for social sentiment), `WS_TOKEN_KEY` (auto-generated on first Wealthsimple connect). None of these are required for the app to run — only for the specific features they power.
+First run seeds an initial set of holdings; subsequent runs just start the dev server. Connect your Wealthsimple account from **Settings** to switch from seeded/CSV data to live sync. Required `.env.local` keys: `DATABASE_URL` (auto-set), `ANTHROPIC_API_KEY` (for AI features), `REDDIT_CLIENT_ID`/`REDDIT_CLIENT_SECRET`/`REDDIT_USER_AGENT` (for social sentiment), `WS_TOKEN_KEY` (auto-generated on first Wealthsimple connect). None of these are required for the app to run — only for the specific features they power. Run `npm test` to execute the S/R unit suite.
+
+> **After any schema change** (`prisma db push`), restart the dev server — the running Next.js process caches the old Prisma client and won't see new models until it restarts.
 
 ---
 
-## 11. Where to look next
+## 12. Where to look next
 
 | I want to understand… | Start here |
 |---|---|
@@ -261,4 +309,8 @@ First run seeds an initial set of holdings; subsequent runs just start the dev s
 | How the SPY signal decides direction | `src/lib/daytrade/strategy.ts` |
 | How ratings are composed and graded | `src/lib/rating/rate.ts` + `/api/rate` (GET = scoreboard) |
 | How the Morning Brief is written | `src/lib/brief.ts` |
+| How S/R zones are detected & scored | `src/lib/sr/engine.ts` (orchestrator) → `swings.ts`, `zones.ts`, `scoring.ts`, `events.ts` |
+| How market data is fetched & cached | `src/lib/market-data/` (`providers/yahoo.ts`, `cache.ts`, `normalize.ts`) |
+| The S/R engine's tuning knobs | `src/lib/sr/config.ts` (`DEFAULT_SR_CONFIG`, `PROFILES`) |
 | The full data model | `prisma/schema.prisma` |
+| The build history of the whole project | the phase-by-phase task list + this file's git history |

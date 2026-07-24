@@ -102,6 +102,29 @@ export async function checkWatchlist(fetchPrices: (tickers: string[]) => Promise
   }
 }
 
+/** Rule: price has entered an A/A+ grade S/R zone on a holding or watchlist name. */
+export async function checkSrZoneEntries(): Promise<void> {
+  const { findAGradeZoneEntries } = await import('@/lib/sr/scanner')
+  const [holdings, watch] = await Promise.all([
+    prisma.holding.findMany({ where: { quantity: { gt: 0 } }, select: { ticker: true } }),
+    prisma.watchlistItem.findMany({ select: { ticker: true } }),
+  ])
+  const symbols = Array.from(new Set([...holdings.map((h) => h.ticker), ...watch.map((w) => w.ticker)])).slice(0, 8)
+  if (symbols.length === 0) return
+  const hits = await findAGradeZoneEntries(symbols)
+  for (const hit of hits) {
+    await raiseAlert({
+      type: 'SR_ZONE',
+      ticker: hit.symbol,
+      title: `${hit.symbol} is at an ${hit.grade} ${hit.polarity.toLowerCase()} zone`,
+      body: `Zone $${hit.lower.toFixed(2)}–$${hit.upper.toFixed(2)}${hit.setupConfidence != null ? ` · setup read ${hit.setupConfidence}/100` : ''}. Check structure before acting.`,
+      href: '/sr',
+      severity: 'action',
+      dedupeKey: `SR_ZONE:${hit.symbol}:${hit.grade}:${todayEt()}`,
+    })
+  }
+}
+
 /** Rule: the SPY day-trade ensemble fired above the trade threshold. */
 export async function checkDayTradeSignal(direction: string, confidence: number): Promise<void> {
   if (direction === 'NEUTRAL' || confidence < 55) return

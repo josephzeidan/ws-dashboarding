@@ -219,6 +219,35 @@ model TickerRating {
   ratedAt      DateTime @default(now())
 }
 
+model OhlcvBar {
+  id        Int      @id @default(autoincrement())
+  symbol    String
+  timeframe String
+  t         BigInt
+  o         Float
+  h         Float
+  l         Float
+  c         Float
+  v         Float
+  adjusted  Boolean  @default(true)
+  session   String   @default("regular")
+  fetchedAt DateTime @default(now())
+
+  @@unique([symbol, timeframe, t, session])
+  @@index([symbol, timeframe, t])
+}
+
+model SrAnalysisCache {
+  id         Int      @id @default(autoincrement())
+  symbol     String
+  configHash String
+  payload    String // JSON.stringify(SRAnalysis)
+  createdAt  DateTime @default(now())
+
+  @@unique([symbol, configHash])
+  @@index([createdAt])
+}
+
 model DiscordTask {
   id          String    @id @default(cuid())
   channelId   String

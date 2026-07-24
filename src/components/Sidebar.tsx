@@ -13,6 +13,7 @@ const NAV = [
   { section: 'Analysis' },
   { href: '/news',           label: 'News',             icon: '📰' },
   { href: '/rate',           label: 'Rate a Stock',     icon: '🎯' },
+  { href: '/sr',             label: 'Support/Resistance', icon: '📐' },
   { href: '/daytrade',       label: 'SPY Day Trade',    icon: '📈' },
   { href: '/recommendations',label: 'Recommendations',  icon: '◎' },
   { href: '/rebalancing',    label: 'Rebalancing',      icon: '⇄' },
